@@ -1,100 +1,115 @@
 #!/usr/bin/python3
 
-import pickle, socket, _thread
+import socket, threading, sys
+
+PORT = 5555
 
 class Server:
 
-    def __init__(self, addr, port):
-        self.running = True
-        self.connection = None
-        self.host = None
-        self.port = port
-        self.addr = addr
+    def __init__(self):
         self.bitrate = 1024
         self.max_clients = 2
-        self.clients = set()
-        self.games = {}
+        self.connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.running = True
+        self.started = False
         self.token = 0
-        self.status = 'Offline'
 
-        self.set_connection()
-
-    def set_connection(self):
-
-        af, st, pr, cn, sa = None, None, None, None, None
-        
-        for res in socket.getaddrinfo(self.host, self.port,
-                socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_PASSIVE):
-            af, st, pr, cn, sa = res
-        
-            try:
-                self.connection = socket.socket(af, st, pr)
-                self.status = 'Address Family: {}\nSocket Type: {}\nProtocol: {}\nCanon Name: {}\nServer Address: {}'.format(af, st, pr, cn, sa)
-
-            except socket.error as err:
-                self.status = err
-                self.connection =  None
-                continue
-            break
-        print(self.status)
-        if self.connection is None:
-            self.status = "Failed to open socket"
-            exit(1)
-        else:
-            self.open_server()
-        print(self.status)
-
-    def get_client(self, conn, player):
-        conn.send(pickle.dumps(self.clients[player]))
-        client_connected = True
-
-        while client_connected:
-            try:
-                data = pickle.loads(conn.recv(self.bitrate))
-                self.clients[player] = data
-
-                if not data:
-                    self.clients.remove(player)
-                    self.status = "Disconnected"
-                    break
-                else:
-                    for p in self.clients:
-                        response = p
-
-                    self.status = "Recieved: {} Sending: {}".format(response, response)
-                conn.sendall(pickle.dumps(response))
-
-            except socket.error as err:
-                self.status = err
-                break
-        self.status = "Connection Ended"
-        conn.close()
-        print(self.status)
-
-    def open_server(self):
         try:
-            self.connection.bind((self.addr, self.port))
-            self.status = 'Successfully connected\nAddress: {}\nPort: {}'.format(self.addr, self.port)
-        except socket.error as err:
-            self.status = err
+            self.connection.bind(('0.0.0.0', PORT))
+            self.connection.listen()
+        except:
+            self.connection.close()
+            exit()
 
-        print(self.status)
-        self.connection.listen(self.max_clients)
-        self.status = "Waiting on clients"
+        self.clients = []
 
-    def start(self):
-        if self.connection != None:
-            self.run()
-        print(self.status)
-
-    def run(self):
-        self.running = False
+    def handler(self, c, a):
         while self.running:
-            print(self.status)
-            conn, addr = self.connection.accept()
-            self.status = "Connected to: {}".format(self.addr)
-            _thread.start_new_thread(self.get_client, (conn,))
-        self.connection.close()
+            data = c.recv(self.bitrate)
+            
+            # Broadcast data to all clients that aren't the current client in the iteration
+            if data:
+                print('{}:{} says: {}'.format(a[0], a[1], data))
+                for user in self.clients:
+                    if user != c:
+                        response = str.encode('{}:{} says: {}'.format(a[0], a[1], data))
+                        user.send(response)
+            else:
+                self.clients.remove(c)
+                c.close()
+                print("{}:{} disconnected\n{} clients left in server.".format(a[0], a[1], len(self.clients)))
+                break
+            
+    def run(self):
 
-S = Server('', 5555)
-S.start()
+        while self.running:
+            if self.started and len(self.clients) < 1:
+                self.running = False
+            if len(self.clients) < self.max_clients:
+                c, a = self.connection.accept()
+    
+                #
+                ct = threading.Thread(target=self.handler, args=(c, a))
+                ct.daemon = True
+                ct.start()
+
+
+                self.clients.append(c)
+                # Show data
+                try:
+                    print("Token {} belongs to {}".format(self.token, self.clients[self.token]))
+                except:
+                    pass
+
+                if self.clients:
+                    self.started = True
+                    try:
+                        print("Token {} belongs to {}".format(self.clients[self.token]))
+                    except IndexError:
+                        if len(self.clients) <= 0:
+                            self.connection.close()
+                            self.running = False
+
+                self.token += 1
+            else:
+                pass
+
+class Client:
+
+    def __init__(self, address):
+        self.bitrate = 1024
+        self.connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.connected = True
+        
+        try:
+            self.connection.connect((address, PORT))
+            it = threading.Thread(target=self.send)
+            it.daemon = True
+            it.start()
+        except:
+            self.connection.close()
+            self.connected = False
+            exit()
+
+        while self.connected:
+            data = self.connection.recv(self.bitrate)
+            if not data:
+                self.connection.close()
+                break
+            print(data)
+
+    def send(self):
+        while self.connected:
+            self.connection.send(bytes(input(": "), 'utf-8'))
+
+
+
+if (len(sys.argv) > 2):
+    client = Client(sys.argv[2])
+elif (len(sys.argv) > 1):
+    arg = sys.argv[1]
+    if arg == '1' or arg == 'true':
+        server = Server()
+        server.run()
+else:
+    pass
